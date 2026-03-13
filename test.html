@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>穆桂英皮影戏 - Shadow Puppet Control</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #1a1a1a;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: auto;
+        }
+
+        #canvas {
+            border: 2px solid #8b7355;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+            cursor: grab;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        #canvas:active {
+            cursor: grabbing;
+        }
+
+        #video {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 240px;
+            height: 180px;
+            border: 2px solid #8b7355;
+            display: none;
+            transform: scaleX(-1);
+        }
+
+        #handCanvas {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 240px;
+            height: 180px;
+            border: 2px solid #8b7355;
+            background: rgba(0,0,0,0.8);
+            border-radius: 5px;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #d4c5b0;
+            font-size: 12px;
+            background: rgba(0,0,0,0.5);
+            padding: 8px;
+            border-radius: 5px;
+            max-width: 200px;
+        }
+
+        #status {
+            margin-top: 3px;
+            color: #ffd700;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="canvas"></canvas>
+        <video id="video" autoplay playsinline></video>
+        <canvas id="handCanvas" width="240" height="180"></canvas>
+        <div id="info">
+            <div><strong>穆桂英皮影戏</strong></div>
+            <div id="status">初始化中...</div>
+            <div style="margin-top: 5px; font-size: 10px; opacity: 0.8;">
+                手势/鼠标控制
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script>
+        // ========== 严格按照 ShadowPlay 方式实现的皮影控制系统 ==========
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('video');
+        const statusEl = document.getElementById('status');
+        const handCanvas = document.getElementById('handCanvas');
+        const handCtx = handCanvas ? handCanvas.getContext('2d') : null;
+
+        // Canvas setup
+        canvas.width = 1400;
+        canvas.height = 1100;
+
+        // Image loading
+        const images = {
+            head: null,
+            torso: null,
+            lowerBody: null,
+            leftArm: null,
+            leftHand: null,
+            rightArm: null,
+            rightHand: null,
+            leftLeg: null,
+            rightLeg: null
+        };
+
+        let imagesLoaded = 0;
+        const totalImages = 9;
+
+        function loadImage(key, path) {
+            const img = new Image();
+            img.onload = () => {
+                images[key] = img;
+                imagesLoaded++;
+                console.log(`Loaded ${key}: ${img.width}x${img.height}`);
+                if (imagesLoaded === totalImages) {
+                    statusEl.textContent = '素材加载完成 - 伸出双手';
+                } else {
+                    statusEl.textContent = `加载素材 ${imagesLoaded}/${totalImages}...`;
+                }
+            };
+            img.onerror = () => {
+                console.error(`Failed to load: ${path}`);
+                statusEl.textContent = `加载失败：${path}`;
+                imagesLoaded++;
+            };
+            img.src = path;
+        }
+
+        // 加载穆桂英素材 - 使用相对路径 assets 目录
+        loadImage('head', 'assets/头.png');
+        loadImage('torso', 'assets/上身.png');
+        loadImage('lowerBody', 'assets/下身.png');
+        loadImage('leftArm', 'assets/左手.png');
+        loadImage('leftHand', 'assets/左手 - 下.png');
+        loadImage('rightArm', 'assets/右手.png');
+        loadImage('rightHand', 'assets/右手 - 下.png');
+        loadImage('leftLeg', 'assets/左腿.png');
+        loadImage('rightLeg', 'assets/右腿.png');
+
+        // Physics constants - 与 ShadowPlay 保持一致
+        const LERP_FACTOR = 0.18;
+        const SPRING_K = 0.08;
+        const DAMPING = 0.92;
+        const GRAVITY = 0.8;
+        const BODY_FOLLOW = 0.003;
+
+        // Puppet configuration - 根据穆桂英素材调整
+        // 需要根据实际图片尺寸和 pivot 点调整
+        const puppetConfig = {
+            head: { x: 700, y: 180, scale: 0.15, rotation: 0, pivot: { x: 150, y: 200 } },
+            torso: { x: 700, y: 320, scale: 0.15, rotation: 0, pivot: { x: 200, y: 150 } },
+            lowerBody: { x: 700, y: 520, scale: 0.15, rotation: 0, pivot: { x: 200, y: 50 } },
+            leftArm: { x: 650, y: 350, scale: 0.15, rotation: 0, pivot: { x: 180, y: 80 } },
+            leftHand: { x: 580, y: 450, scale: 0.15, rotation: 0, pivot: { x: 100, y: 80 } },
+            rightArm: { x: 750, y: 350, scale: 0.15, rotation: 0, pivot: { x: 80, y: 80 } },
+            rightHand: { x: 820, y: 450, scale: 0.15, rotation: 0, pivot: { x: 80, y: 80 } },
+            leftLeg: { x: 680, y: 700, scale: 0.15, rotation: 0, pivot: { x: 150, y: 100 } },
+            rightLeg: { x: 720, y: 700, scale: 0.15, rotation: 0, pivot: { x: 150, y: 100 } }
+        };
+
+        // 连接关系
+        const connections = {
+            head: 'torso',
+            lowerBody: 'torso',
+            leftArm: 'torso',
+            leftHand: 'leftArm',
+            rightArm: 'torso',
+            rightHand: 'rightArm',
+            leftLeg: 'lowerBody',
+            rightLeg: 'lowerBody'
+        };
+
+        // Vector2 class - 与 ShadowPlay 完全一致
+        class Vector2 {
+            constructor(x = 0, y = 0) {
+                this.x = x;
+                this.y = y;
+            }
+
+            add(v) {
+                return new Vector2(this.x + v.x, this.y + v.y);
+            }
+
+            sub(v) {
+                return new Vector2(this.x - v.x, this.y - v.y);
+            }
+
+            mult(s) {
+                return new Vector2(this.x * s, this.y * s);
+            }
+
+            mag() {
+                return Math.sqrt(this.x * this.x + this.y * this.y);
+            }
+
+            normalize() {
+                const m = this.mag();
+                return m > 0 ? this.mult(1 / m) : new Vector2(0, 0);
+            }
+
+            clone() {
+                return new Vector2(this.x, this.y);
+            }
+        }
+
+        // Tether class - 与 ShadowPlay 完全一致
+        class Tether {
+            constructor(anchorX, anchorY, attachX, attachY) {
+                this.anchor = new Vector2(anchorX, anchorY);
+                this.target = new Vector2(attachX, attachY);
+                this.attach = new Vector2(attachX, attachY);
+                this.velocity = new Vector2(0, 0);
+            }
+
+            updateTarget(targetX, targetY) {
+                this.target.x = targetX;
+                this.target.y = targetY;
+            }
+
+            applyForce() {
+                const force = this.target.sub(this.attach).mult(SPRING_K);
+                this.velocity = this.velocity.add(force);
+                this.velocity.y += GRAVITY * 2.0;
+                this.velocity = this.velocity.mult(DAMPING);
+                this.attach = this.attach.add(this.velocity);
+                this.attach.x = Math.max(50, Math.min(canvas.width - 50, this.attach.x));
+                this.attach.y = Math.max(100, Math.min(canvas.height - 50, this.attach.y));
+            }
+
+            draw(ctx, handWorldPos, anchorX) {
+                ctx.strokeStyle = 'rgba(139, 115, 85, 0.4)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(anchorX, 60);
+                ctx.lineTo(handWorldPos.x, handWorldPos.y);
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(139, 115, 85, 0.7)';
+                ctx.beginPath();
+                ctx.arc(anchorX, 60, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // ShadowPuppet class - 严格按照 ShadowPlay 方式
+        class ShadowPuppet {
+            constructor() {
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+
+                this.bodyCenter = new Vector2(centerX, centerY - 100);
+                this.bodyVelocity = new Vector2(0, 0);
+
+                this.tethers = {
+                    leftHand: new Tether(centerX - 150, 60, centerX - 200, centerY + 200),
+                    rightHand: new Tether(centerX + 150, 60, centerX + 200, centerY + 200)
+                };
+
+                this.rotations = {
+                    head: 0,
+                    torso: 0,
+                    lowerBody: 0,
+                    leftArm: 0,
+                    leftHand: 0,
+                    rightArm: 0,
+                    rightHand: 0,
+                    leftLeg: 0,
+                    rightLeg: 0
+                };
+
+                this.rotationVelocities = {
+                    head: 0,
+                    torso: 0,
+                    lowerBody: 0,
+                    leftArm: 0,
+                    leftHand: 0,
+                    rightArm: 0,
+                    rightHand: 0,
+                    leftLeg: 0,
+                    rightLeg: 0
+                };
+
+                this.leftHandWorld = new Vector2(centerX - 150, centerY + 150);
+                this.rightHandWorld = new Vector2(centerX + 150, centerY + 150);
+                this.leftElbowWorld = new Vector2(centerX - 80, centerY + 50);
+                this.rightElbowWorld = new Vector2(centerX + 80, centerY + 50);
+            }
+
+            update() {
+                Object.values(this.tethers).forEach(t => t.applyForce());
+
+                // 身体主要跟随左手（前面的手）
+                const leftWeight = 0.7;
+                const rightWeight = 0.3;
+                const avgHandX = this.tethers.leftHand.attach.x * leftWeight + this.tethers.rightHand.attach.x * rightWeight;
+                const avgHandY = this.tethers.leftHand.attach.y * leftWeight + this.tethers.rightHand.attach.y * rightWeight;
+
+                const targetBodyX = avgHandX;
+                const targetBodyY = avgHandY + 150;
+
+                const pullForce = new Vector2(
+                    (targetBodyX - this.bodyCenter.x) * BODY_FOLLOW,
+                    (targetBodyY - this.bodyCenter.y) * BODY_FOLLOW * 1.5
+                );
+
+                this.bodyVelocity = this.bodyVelocity.add(pullForce);
+                this.bodyVelocity.y += GRAVITY * 0.3;
+                this.bodyVelocity = this.bodyVelocity.mult(0.95);
+
+                const maxSpeed = 3;
+                const speed = this.bodyVelocity.mag();
+                if (speed > maxSpeed) {
+                    this.bodyVelocity = this.bodyVelocity.mult(maxSpeed / speed);
+                }
+
+                this.bodyCenter = this.bodyCenter.add(this.bodyVelocity);
+                this.bodyCenter.y = Math.max(200, Math.min(canvas.height - 400, this.bodyCenter.y));
+
+                // 躯干轻微摇晃
+                const time = Date.now() / 1000;
+                const swayAmount = 5;
+                const swaySpeed = 0.5;
+                const sway = Math.sin(time * swaySpeed) * swayAmount;
+                const wobble = Math.sin(time * 1.7) * 2;
+                const torsoTargetAngle = sway + wobble;
+
+                this.rotationVelocities.torso += (torsoTargetAngle - this.rotations.torso) * 0.02;
+                this.rotationVelocities.torso *= 0.95;
+                this.rotations.torso += this.rotationVelocities.torso;
+                this.rotations.torso = Math.max(-15, Math.min(15, this.rotations.torso));
+
+                this.updateLimbPositions();
+            }
+
+            updateLimbPositions() {
+                const torsoCfg = puppetConfig.torso;
+                const leftArmCfg = puppetConfig.leftArm;
+                const leftHandCfg = puppetConfig.leftHand;
+                const rightArmCfg = puppetConfig.rightArm;
+                const rightHandCfg = puppetConfig.rightHand;
+
+                const torsoWorld = new Vector2(this.bodyCenter.x, this.bodyCenter.y);
+                const torsoRot = this.rotations.torso * Math.PI / 180;
+                const torsocos = Math.cos(torsoRot);
+                const torsosin = Math.sin(torsoRot);
+
+                // 左臂
+                const leftShoulderOffsetX = leftArmCfg.pivot.x - torsoCfg.pivot.x;
+                const leftShoulderOffsetY = leftArmCfg.pivot.y - torsoCfg.pivot.y;
+                const leftShoulderWorld = new Vector2(
+                    torsoWorld.x + (leftShoulderOffsetX * torsocos - leftShoulderOffsetY * torsosin),
+                    torsoWorld.y + (leftShoulderOffsetX * torsosin + leftShoulderOffsetY * torsocos)
+                );
+
+                const LEFT_ARM_IMAGE_ANGLE = Math.atan2(
+                    leftHandCfg.pivot.y - leftArmCfg.pivot.y,
+                    leftHandCfg.pivot.x - leftArmCfg.pivot.x
+                );
+
+                const leftTether = this.tethers.leftHand.attach;
+                const leftTargetAngle = Math.atan2(
+                    leftTether.y - leftShoulderWorld.y,
+                    leftTether.x - leftShoulderWorld.x
+                );
+
+                let leftArmTargetRot = (leftTargetAngle - LEFT_ARM_IMAGE_ANGLE) * 180 / Math.PI;
+                while (leftArmTargetRot > 180) leftArmTargetRot -= 360;
+                while (leftArmTargetRot < -180) leftArmTargetRot += 360;
+                leftArmTargetRot = Math.max(-80, Math.min(30, leftArmTargetRot));
+                this.rotations.leftArm += (leftArmTargetRot - this.rotations.leftArm) * 0.1;
+
+                const elbowLocalX = leftHandCfg.pivot.x - leftArmCfg.pivot.x;
+                const elbowLocalY = leftHandCfg.pivot.y - leftArmCfg.pivot.y;
+                const leftArmWorldAngle = (this.rotations.torso + this.rotations.leftArm) * Math.PI / 180;
+                this.leftElbowWorld = new Vector2(
+                    leftShoulderWorld.x + (elbowLocalX * Math.cos(leftArmWorldAngle) - elbowLocalY * Math.sin(leftArmWorldAngle)),
+                    leftShoulderWorld.y + (elbowLocalX * Math.sin(leftArmWorldAngle) + elbowLocalY * Math.cos(leftArmWorldAngle))
+                );
+
+                const leftHandLocalX = leftHandCfg.x - leftHandCfg.pivot.x;
+                const leftHandLocalY = leftHandCfg.y - leftHandCfg.pivot.y;
+                const leftHandWorldAngle = (this.rotations.torso + this.rotations.leftArm + this.rotations.leftHand) * Math.PI / 180;
+                this.leftHandWorld = new Vector2(
+                    this.leftElbowWorld.x + (leftHandLocalX * Math.cos(leftHandWorldAngle) - leftHandLocalY * Math.sin(leftHandWorldAngle)),
+                    this.leftElbowWorld.y + (leftHandLocalX * Math.sin(leftHandWorldAngle) + leftHandLocalY * Math.cos(leftHandWorldAngle))
+                );
+
+                // 右臂
+                const rightShoulderOffsetX = rightArmCfg.pivot.x - torsoCfg.pivot.x;
+                const rightShoulderOffsetY = rightArmCfg.pivot.y - torsoCfg.pivot.y;
+                const rightShoulderWorld = new Vector2(
+                    torsoWorld.x + (rightShoulderOffsetX * torsocos - rightShoulderOffsetY * torsosin),
+                    torsoWorld.y + (rightShoulderOffsetX * torsosin + rightShoulderOffsetY * torsocos)
+                );
+
+                const RIGHT_ARM_IMAGE_ANGLE = Math.atan2(
+                    rightHandCfg.pivot.y - rightArmCfg.pivot.y,
+                    rightHandCfg.pivot.x - rightArmCfg.pivot.x
+                );
+
+                const rightTether = this.tethers.rightHand.attach;
+                const rightTargetAngle = Math.atan2(
+                    rightTether.y - rightShoulderWorld.y,
+                    rightTether.x - rightShoulderWorld.x
+                );
+
+                let rightArmTargetRot = (rightTargetAngle - RIGHT_ARM_IMAGE_ANGLE) * 180 / Math.PI;
+                while (rightArmTargetRot > 180) rightArmTargetRot -= 360;
+                while (rightArmTargetRot < -180) rightArmTargetRot += 360;
+                rightArmTargetRot = Math.max(-80, Math.min(30, rightArmTargetRot));
+                this.rotations.rightArm += (rightArmTargetRot - this.rotations.rightArm) * 0.1;
+
+                const rightElbowLocalX = rightHandCfg.pivot.x - rightArmCfg.pivot.x;
+                const rightElbowLocalY = rightHandCfg.pivot.y - rightArmCfg.pivot.y;
+                const rightArmWorldAngle = (this.rotations.torso + this.rotations.rightArm) * Math.PI / 180;
+                this.rightElbowWorld = new Vector2(
+                    rightShoulderWorld.x + (rightElbowLocalX * Math.cos(rightArmWorldAngle) - rightElbowLocalY * Math.sin(rightArmWorldAngle)),
+                    rightShoulderWorld.y + (rightElbowLocalX * Math.sin(rightArmWorldAngle) + rightElbowLocalY * Math.cos(rightArmWorldAngle))
+                );
+
+                const rightHandLocalX = rightHandCfg.x - rightHandCfg.pivot.x;
+                const rightHandLocalY = rightHandCfg.y - rightHandCfg.pivot.y;
+                const rightHandWorldAngle = (this.rotations.torso + this.rotations.rightArm + this.rotations.rightHand) * Math.PI / 180;
+                this.rightHandWorld = new Vector2(
+                    this.rightElbowWorld.x + (rightHandLocalX * Math.cos(rightHandWorldAngle) - rightHandLocalY * Math.sin(rightHandWorldAngle)),
+                    this.rightElbowWorld.y + (rightHandLocalX * Math.sin(rightHandWorldAngle) + rightHandLocalY * Math.cos(rightHandWorldAngle))
+                );
+
+                // 头部跟随
+                const headTargetAngle = Math.sin(time * swaySpeed - 0.5) * 3 + this.rotations.torso * 0.3;
+                this.rotationVelocities.head += (headTargetAngle - this.rotations.head) * 0.03;
+                this.rotationVelocities.head *= 0.9;
+                this.rotations.head += this.rotationVelocities.head;
+                this.rotations.head = Math.max(-10, Math.min(10, this.rotations.head));
+            }
+
+            getWorldPosition(partId) {
+                const cfg = puppetConfig[partId];
+                const torsoCfg = puppetConfig.torso;
+                const torsoRot = this.rotations.torso * Math.PI / 180;
+
+                const torsoWorld = new Vector2(
+                    this.bodyCenter.x + (torsoCfg.pivot.x - torsoCfg.x),
+                    this.bodyCenter.y + (torsoCfg.pivot.y - torsoCfg.y)
+                );
+
+                const offsetX = cfg.pivot.x - torsoCfg.pivot.x;
+                const offsetY = cfg.pivot.y - torsoCfg.pivot.y;
+
+                return new Vector2(
+                    torsoWorld.x + (offsetX * Math.cos(torsoRot) - offsetY * Math.sin(torsoRot)),
+                    torsoWorld.y + (offsetX * Math.sin(torsoRot) + offsetY * Math.cos(torsoRot))
+                );
+            }
+
+            draw(ctx) {
+                if (imagesLoaded < totalImages) return;
+
+                const drawPart = (partId) => {
+                    const cfg = puppetConfig[partId];
+                    const img = images[partId];
+                    if (!img) return;
+
+                    const w = img.width * cfg.scale;
+                    const h = img.height * cfg.scale;
+
+                    let pivotWorld;
+                    if (partId === 'leftHand' || partId === 'rightHand') {
+                        pivotWorld = partId === 'leftHand' ? this.leftElbowWorld : this.rightElbowWorld;
+                    } else {
+                        pivotWorld = this.getWorldPosition(partId);
+                    }
+
+                    let totalRotation = cfg.rotation + this.rotations.torso;
+                    if (partId === 'leftArm' || partId === 'rightArm') {
+                        totalRotation += this.rotations[partId];
+                    }
+                    if (partId === 'leftHand' || partId === 'rightHand') {
+                        totalRotation += this.rotations.torso + this.rotations[partId.replace('Hand', 'Arm')] + this.rotations[partId];
+                    }
+
+                    const totalRotationRad = totalRotation * Math.PI / 180;
+
+                    ctx.save();
+                    ctx.translate(pivotWorld.x, pivotWorld.y);
+                    ctx.rotate(totalRotationRad);
+
+                    const offsetX = cfg.x - cfg.pivot.x;
+                    const offsetY = cfg.y - cfg.pivot.y;
+                    ctx.drawImage(img, offsetX * cfg.scale - w / 2, offsetY * cfg.scale - h / 2, w, h);
+
+                    ctx.restore();
+                };
+
+                // 绘制顺序：从后往前
+                drawPart('leftLeg');
+                drawPart('rightLeg');
+                drawPart('lowerBody');
+                drawPart('torso');
+                drawPart('head');
+                drawPart('leftArm');
+                drawPart('rightArm');
+                drawPart('leftHand');
+                drawPart('rightHand');
+
+                // 绘制绳子
+                const leftAnchorX = canvas.width / 2 - 150;
+                const rightAnchorX = canvas.width / 2 + 150;
+                this.tethers.leftHand.draw(ctx, this.leftHandWorld, leftAnchorX);
+                this.tethers.rightHand.draw(ctx, this.rightHandWorld, rightAnchorX);
+            }
+        }
+
+        // Initialize puppet
+        const puppet = new ShadowPuppet();
+
+        // Hand tracking state
+        let handsDetected = false;
+        let handLandmarks = { left: null, right: null };
+
+        // Mouse control
+        let draggedTether = null;
+        let mousePos = new Vector2(0, 0);
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            mousePos.x = (e.clientX - rect.left) * scaleX;
+            mousePos.y = (e.clientY - rect.top) * scaleY;
+
+            let minDist = 100;
+            if (puppet.leftHandWorld) {
+                const dist = Math.hypot(puppet.leftHandWorld.x - mousePos.x, puppet.leftHandWorld.y - mousePos.y);
+                if (dist < minDist) {
+                    draggedTether = 'leftHand';
+                    minDist = dist;
+                }
+            }
+            if (puppet.rightHandWorld) {
+                const dist = Math.hypot(puppet.rightHandWorld.x - mousePos.x, puppet.rightHandWorld.y - mousePos.y);
+                if (dist < minDist) {
+                    draggedTether = 'rightHand';
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            mousePos.x = (e.clientX - rect.left) * scaleX;
+            mousePos.y = (e.clientY - rect.top) * scaleY;
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            draggedTether = null;
+        });
+
+        // MediaPipe Hands setup
+        function setupHandTracking() {
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults(onHandsResults);
+
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    if (video.readyState === 4) {
+                        await hands.send({ image: video });
+                    }
+                },
+                width: 640,
+                height: 480
+            });
+
+            camera.start().then(() => {
+                statusEl.textContent = '摄像头已启动 - 伸出双手控制（或用鼠标）';
+                video.style.display = 'none';
+            }).catch((err) => {
+                console.error('Camera error:', err);
+                statusEl.textContent = '摄像头启动失败 - 使用鼠标拖拽控制';
+            });
+        }
+
+        function onHandsResults(results) {
+            if (handCtx) {
+                handCtx.fillStyle = 'rgba(0,0,0,0.8)';
+                handCtx.fillRect(0, 0, 240, 180);
+            }
+
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                handsDetected = false;
+                if (handCtx) {
+                    handCtx.fillStyle = '#666';
+                    handCtx.font = '14px Arial';
+                    handCtx.textAlign = 'center';
+                    handCtx.fillText('伸出双手...', 120, 90);
+                }
+                return;
+            }
+
+            handsDetected = true;
+            handLandmarks = { left: null, right: null };
+
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                const handedness = results.multiHandedness[i];
+                const isLeftHand = handedness.label === 'Right';
+
+                if (isLeftHand) {
+                    handLandmarks.left = landmarks;
+                } else {
+                    handLandmarks.right = landmarks;
+                }
+
+                if (handCtx) {
+                    const color = isLeftHand ? '#ff6b6b' : '#4ecdc4';
+                    drawHandSkeleton(handCtx, landmarks, color);
+                }
+            }
+
+            if (handLandmarks.left) {
+                const indexTip = handLandmarks.left[8];
+                const x = (1 - indexTip.x) * canvas.width;
+                const y = indexTip.y * canvas.height;
+                puppet.tethers.leftHand.updateTarget(x, y);
+            }
+
+            if (handLandmarks.right) {
+                const indexTip = handLandmarks.right[8];
+                const x = (1 - indexTip.x) * canvas.width;
+                const y = indexTip.y * canvas.height;
+                puppet.tethers.rightHand.updateTarget(x, y);
+            }
+        }
+
+        function drawHandSkeleton(ctx, landmarks, color) {
+            const w = 240, h = 180;
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],
+                [0, 5], [5, 6], [6, 7], [7, 8],
+                [0, 9], [9, 10], [10, 11], [11, 12],
+                [0, 13], [13, 14], [14, 15], [15, 16],
+                [0, 17], [17, 18], [18, 19], [19, 20],
+                [5, 9], [9, 13], [13, 17]
+            ];
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            connections.forEach(([i, j]) => {
+                const p1 = landmarks[i];
+                const p2 = landmarks[j];
+                ctx.beginPath();
+                ctx.moveTo((1 - p1.x) * w, p1.y * h);
+                ctx.lineTo((1 - p2.x) * w, p2.y * h);
+                ctx.stroke();
+            });
+
+            ctx.fillStyle = color;
+            landmarks.forEach((p, i) => {
+                const x = (1 - p.x) * w;
+                const y = p.y * h;
+                ctx.beginPath();
+                ctx.arc(x, y, i === 8 ? 6 : 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawBackground() {
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#f5ead8');
+            gradient.addColorStop(1, '#ebe0c8');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'rgba(139, 115, 85, 0.02)';
+            for (let i = 0; i < 500; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                ctx.fillRect(x, y, 1, 1);
+            }
+
+            ctx.fillStyle = '#8b7355';
+            ctx.fillRect(0, 40, canvas.width, 20);
+
+            ctx.strokeStyle = 'rgba(139, 115, 85, 0.5)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height - 10);
+            ctx.lineTo(canvas.width, canvas.height - 10);
+            ctx.stroke();
+        }
+
+        function animate() {
+            drawBackground();
+
+            if (draggedTether) {
+                puppet.tethers[draggedTether].updateTarget(mousePos.x, mousePos.y);
+            }
+
+            puppet.update();
+            puppet.draw(ctx);
+
+            requestAnimationFrame(animate);
+        }
+
+        // Start
+        setupHandTracking();
+        animate();
+    </script>
+</body>
+</html>

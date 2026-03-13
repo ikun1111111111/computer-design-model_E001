@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch(domain:www.ihchina.cn)",
+      "WebFetch(domain:baike.baidu.com)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(killall python:*)",
+      "Bash(Get-Process:*)",
+      "Bash(pkill:*)",
+      "Bash(netstat:*)",
+      "Bash(do taskkill:*)",
+      "Bash(find:*)",
+      "Bash(powershell:*)",
+      "Bash(kill:*)",
+      "Bash(npm install:*)"
+    ]
+  }
+}
