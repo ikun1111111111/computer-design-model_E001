@@ -1,8 +1,8 @@
 # 开发任务规划 (Development Task Plan)
 
 **项目**: 数字传承人 (The Digital Inheritor)
-**版本**: V1.0
-**最后更新**: 2026-03-01
+**版本**: V1.1
+**最后更新**: 2026-03-13
 
 ---
 
@@ -271,6 +271,18 @@
   - [x] 学习记录表：user_id, craft_id, duration, score
   - [x] 作品集表：user_id, image_url, created_at
   - [x] 创建数据库迁移脚本
+- **实现文件**:
+  - `backend/app/db/mysql_db.py` - 数据模型定义
+  - `backend/app/db/migrate_user_system.py` - 迁移脚本
+  - `backend/app/api/endpoints/user_profile.py` - API 端点
+  - `frontend/src/components/AbilityRadarChart.jsx` - 雷达图组件
+  - `frontend/src/pages/MyPracticeReal.jsx` - 用户档案页面
+- **API 端点**:
+  - `GET /api/v1/user/profile` - 获取用户档案
+  - `GET /api/v1/user/profile/{user_id}/stats` - 获取统计数据
+  - `POST /api/v1/user/profile/{user_id}/practice-record` - 添加练习记录
+  - `POST /api/v1/user/profile/{user_id}/work` - 添加用户作品
+  - `PUT /api/v1/user/profile/{user_id}/abilities` - 更新能力数据
 
 ---
 

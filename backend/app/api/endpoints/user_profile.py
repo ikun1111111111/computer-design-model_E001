@@ -1,246 +1,399 @@
 """
-用户档案系统 API
-提供用户管理、学习记录、作品集等功能
+用户档案 API 端点
+提供用户信息、学习进度、能力雷达图等接口
 """
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List, Optional
-from app.db.mysql_db import User, PracticeLog, Portfolio, get_db
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-# Pydantic 模型用于响应序列化
-class UserBase(BaseModel):
+from app.db.mysql_db import get_db, User, PracticeRecord, UserWork, UserAbility, UserLevel
+
+
+router = APIRouter()
+
+
+# ============== Pydantic 模型 ==============
+
+class UserProfileResponse(BaseModel):
+    """用户档案响应模型"""
     id: int
     name: str
-    level: int
+    avatar_url: str
+    level: str
+    experience_points: int
+    title: str
     created_at: datetime
 
     class Config:
         from_attributes = True
 
-class UserCreate(BaseModel):
-    name: str
-    level: int = 1
 
-class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    level: Optional[int] = None
+class PracticeRecordResponse(BaseModel):
+    """练习记录响应模型"""
+    id: int
+    craft_id: str
+    craft_name: str
+    scenario: Optional[str]
+    duration: int
+    score: float
+    accuracy: float
+    feedback: Optional[str]
+    completed_at: datetime
 
-router = APIRouter()
-
-
-# ============== 用户管理 ==============
-
-@router.get("/users", response_model=List[dict])
-def get_all_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """获取所有用户列表"""
-    users = db.query(User).offset(skip).limit(limit).all()
-    return [{"id": u.id, "name": u.name, "level": u.level, "created_at": u.created_at} for u in users]
+    class Config:
+        from_attributes = True
 
 
-@router.get("/users/{user_id}", response_model=dict)
-def get_user(user_id: int, db: Session = Depends(get_db)):
-    """获取单个用户详情"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-    return {"id": user.id, "name": user.name, "level": user.level, "created_at": user.created_at}
+class UserWorkResponse(BaseModel):
+    """作品响应模型"""
+    id: int
+    craft_id: str
+    craft_name: str
+    title: str
+    description: Optional[str]
+    image_url: str
+    ai_generated: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
-@router.post("/users", response_model=dict)
-def create_user(name: str, level: int = 1, db: Session = Depends(get_db)):
-    """创建新用户"""
-    user = User(name=name, level=level)
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return {"id": user.id, "name": user.name, "level": user.level, "created_at": user.created_at}
+class UserAbilityResponse(BaseModel):
+    """用户能力响应模型"""
+    stability: float
+    accuracy: float
+    speed: float
+    creativity: float
+    knowledge: float
+
+    class Config:
+        from_attributes = True
 
 
-@router.put("/users/{user_id}", response_model=dict)
-def update_user(user_id: int, name: Optional[str] = None, level: Optional[int] = None, db: Session = Depends(get_db)):
-    """更新用户信息"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    if name is not None:
-        user.name = name
-    if level is not None:
-        user.level = level
-
-    db.commit()
-    db.refresh(user)
-    return {"id": user.id, "name": user.name, "level": user.level, "created_at": user.created_at}
+class UserStatsResponse(BaseModel):
+    """用户统计数据响应模型"""
+    total_practice_hours: float
+    average_accuracy: float
+    mastered_crafts: int
+    total_works: int
+    total_practice_sessions: int
 
 
-@router.delete("/users/{user_id}")
-def delete_user(user_id: int, db: Session = Depends(get_db)):
-    """删除用户（级联删除学习记录和作品）"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+# ============== API 端点 ==============
 
-    db.delete(user)
-    db.commit()
-    return {"message": "用户已删除"}
+@router.get("/profile", response_model=Dict[str, Any])
+async def get_user_profile(user_id: int = 1, db: Session = Depends(get_db)):
+    """
+    获取用户档案信息
 
-
-# ============== 学习记录管理 ==============
-
-@router.get("/users/{user_id}/practice-logs", response_model=List[dict])
-def get_user_practice_logs(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """获取用户的学习记录"""
-    # 验证用户存在
+    返回用户基本信息、能力五维数据、统计数据
+    检验标准:
+    - [x] GET /api/v1/user/profile 返回五维数据
+    - [x] 每个维度 0-100 分
+    """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    logs = db.query(PracticeLog).filter(PracticeLog.user_id == user_id).offset(skip).limit(limit).all()
-    return [{"id": log.id, "user_id": log.user_id, "craft_id": log.craft_id, "craft_name": log.craft_name, "duration": log.duration, "score": log.score, "created_at": log.created_at} for log in logs]
+    # 获取用户能力数据
+    abilities = db.query(UserAbility).filter(UserAbility.user_id == user_id).first()
+    if not abilities:
+        # 如果没有能力数据，创建默认的
+        abilities = UserAbility(user_id=user_id)
+        db.add(abilities)
+        db.commit()
+        db.refresh(abilities)
 
+    # 统计数据
+    total_duration = db.query(func.sum(PracticeRecord.duration)).filter(
+        PracticeRecord.user_id == user_id
+    ).scalar() or 0
 
-@router.post("/users/{user_id}/practice-logs", response_model=dict)
-def create_practice_log(
-    user_id: int,
-    craft_id: int,
-    craft_name: str,
-    duration: Optional[int] = None,
-    score: Optional[float] = None,
-    db: Session = Depends(get_db)
-):
-    """创建学习记录"""
-    # 验证用户存在
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    avg_accuracy = db.query(func.avg(PracticeRecord.accuracy)).filter(
+        PracticeRecord.user_id == user_id
+    ).scalar() or 0
 
-    log = PracticeLog(
-        user_id=user_id,
-        craft_id=craft_id,
-        craft_name=craft_name,
-        duration=duration,
-        score=score
-    )
-    db.add(log)
-    db.commit()
-    db.refresh(log)
-    return {"id": log.id, "user_id": log.user_id, "craft_id": log.craft_id, "craft_name": log.craft_name, "duration": log.duration, "score": log.score, "created_at": log.created_at}
+    # 统计掌握的技法数量 (准确率>=80 的记录)
+    mastered_crafts = db.query(func.count(func.distinct(PracticeRecord.craft_id))).filter(
+        PracticeRecord.user_id == user_id,
+        PracticeRecord.accuracy >= 80
+    ).scalar() or 0
 
-
-@router.get("/users/{user_id}/practice-stats", response_model=dict)
-def get_user_practice_stats(user_id: int, db: Session = Depends(get_db)):
-    """获取用户学习统计"""
-    # 验证用户存在
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    logs = db.query(PracticeLog).filter(PracticeLog.user_id == user_id).all()
-
-    total_duration = sum(log.duration or 0 for log in logs)
-    total_sessions = len(logs)
-    avg_score = sum(log.score or 0 for log in logs) / total_sessions if total_sessions > 0 else 0
-    crafts_practiced = len(set(log.craft_id for log in logs))
-
-    return {
-        "user_id": user_id,
-        "total_duration_seconds": total_duration,
-        "total_duration_minutes": round(total_duration / 60, 2),
-        "total_sessions": total_sessions,
-        "average_score": round(avg_score, 2),
-        "crafts_practiced": crafts_practiced
-    }
-
-
-# ============== 作品集管理 ==============
-
-@router.get("/users/{user_id}/portfolios", response_model=List[dict])
-def get_user_portfolios(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """获取用户的作品集"""
-    # 验证用户存在
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    portfolios = db.query(Portfolio).filter(Portfolio.user_id == user_id).offset(skip).limit(limit).all()
-    return [{"id": p.id, "user_id": p.user_id, "image_url": p.image_url, "craft_type": p.craft_type, "description": p.description, "created_at": p.created_at} for p in portfolios]
-
-
-@router.post("/users/{user_id}/portfolios", response_model=dict)
-def create_portfolio(
-    user_id: int,
-    image_url: str,
-    craft_type: Optional[str] = None,
-    description: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """创建作品"""
-    # 验证用户存在
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    portfolio = Portfolio(
-        user_id=user_id,
-        image_url=image_url,
-        craft_type=craft_type,
-        description=description
-    )
-    db.add(portfolio)
-    db.commit()
-    db.refresh(portfolio)
-    return {"id": portfolio.id, "user_id": portfolio.user_id, "image_url": portfolio.image_url, "craft_type": portfolio.craft_type, "description": portfolio.description, "created_at": portfolio.created_at}
-
-
-@router.delete("/portfolios/{portfolio_id}")
-def delete_portfolio(portfolio_id: int, db: Session = Depends(get_db)):
-    """删除作品"""
-    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
-    if not portfolio:
-        raise HTTPException(status_code=404, detail="作品不存在")
-
-    db.delete(portfolio)
-    db.commit()
-    return {"message": "作品已删除"}
-
-
-# ============== 用户完整档案 ==============
-
-@router.get("/users/{user_id}/profile", response_model=dict)
-def get_user_profile(user_id: int, db: Session = Depends(get_db)):
-    """获取用户完整档案（包含基本信息、学习统计、作品集）"""
-    # 验证用户存在
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-
-    # 获取学习统计
-    logs = db.query(PracticeLog).filter(PracticeLog.user_id == user_id).all()
-    total_duration = sum(log.duration or 0 for log in logs)
-    total_sessions = len(logs)
-    avg_score = sum(log.score or 0 for log in logs) / total_sessions if total_sessions > 0 else 0
-    crafts_practiced = len(set(log.craft_id for log in logs))
-
-    # 获取作品集
-    portfolios = db.query(Portfolio).filter(Portfolio.user_id == user_id).all()
+    total_works = db.query(func.count(UserWork.id)).filter(
+        UserWork.user_id == user_id
+    ).scalar() or 0
 
     return {
         "user": {
             "id": user.id,
             "name": user.name,
-            "level": user.level,
-            "created_at": user.created_at
+            "avatar_url": user.avatar_url,
+            "level": user.level.value,
+            "experience_points": user.experience_points,
+            "title": user.title,
+            "created_at": user.created_at.isoformat()
+        },
+        "abilities": {
+            "stability": abilities.stability,
+            "accuracy": abilities.accuracy,
+            "speed": abilities.speed,
+            "creativity": abilities.creativity,
+            "knowledge": abilities.knowledge
         },
         "stats": {
-            "total_duration_seconds": total_duration,
-            "total_duration_minutes": round(total_duration / 60, 2),
-            "total_sessions": total_sessions,
-            "average_score": round(avg_score, 2),
-            "crafts_practiced": crafts_practiced
-        },
-        "portfolios": [{"id": p.id, "user_id": p.user_id, "image_url": p.image_url, "craft_type": p.craft_type, "description": p.description, "created_at": p.created_at} for p in portfolios],
-        "portfolio_count": len(portfolios)
+            "total_practice_hours": round(total_duration / 3600, 1),
+            "average_accuracy": round(avg_accuracy, 1),
+            "mastered_crafts": mastered_crafts,
+            "total_works": total_works
+        }
+    }
+
+
+@router.get("/profile/{user_id}/practice-records", response_model=List[PracticeRecordResponse])
+async def get_user_practice_records(
+    user_id: int,
+    limit: int = 10,
+    craft_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取用户练习记录"""
+    query = db.query(PracticeRecord).filter(PracticeRecord.user_id == user_id)
+
+    if craft_id:
+        query = query.filter(PracticeRecord.craft_id == craft_id)
+
+    records = query.order_by(PracticeRecord.completed_at.desc()).limit(limit).all()
+    return records
+
+
+@router.get("/profile/{user_id}/works", response_model=List[UserWorkResponse])
+async def get_user_works(
+    user_id: int,
+    limit: int = 20,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取用户作品集"""
+    query = db.query(UserWork).filter(UserWork.user_id == user_id)
+
+    if status:
+        query = query.filter(UserWork.status == status)
+
+    works = query.order_by(UserWork.created_at.desc()).limit(limit).all()
+    return works
+
+
+@router.get("/profile/{user_id}/stats", response_model=UserStatsResponse)
+async def get_user_stats(user_id: int, db: Session = Depends(get_db)):
+    """获取用户统计数据"""
+    # 总练习时长 (小时)
+    total_duration = db.query(func.sum(PracticeRecord.duration)).filter(
+        PracticeRecord.user_id == user_id
+    ).scalar() or 0
+
+    # 平均准确率
+    avg_accuracy = db.query(func.avg(PracticeRecord.accuracy)).filter(
+        PracticeRecord.user_id == user_id
+    ).scalar() or 0
+
+    # 掌握的技法数量
+    mastered_crafts = db.query(func.count(func.distinct(PracticeRecord.craft_id))).filter(
+        PracticeRecord.user_id == user_id,
+        PracticeRecord.accuracy >= 80
+    ).scalar() or 0
+
+    # 作品总数
+    total_works = db.query(func.count(UserWork.id)).filter(
+        UserWork.user_id == user_id
+    ).scalar() or 0
+
+    # 总练习次数
+    total_sessions = db.query(func.count(PracticeRecord.id)).filter(
+        PracticeRecord.user_id == user_id
+    ).scalar() or 0
+
+    return UserStatsResponse(
+        total_practice_hours=round(total_duration / 3600, 1),
+        average_accuracy=round(avg_accuracy, 1),
+        mastered_crafts=mastered_crafts,
+        total_works=total_works,
+        total_practice_sessions=total_sessions
+    )
+
+
+@router.post("/profile/{user_id}/practice-record")
+async def add_practice_record(
+    user_id: int,
+    craft_id: str,
+    craft_name: str,
+    duration: int,
+    score: float,
+    accuracy: float,
+    scenario: Optional[str] = None,
+    feedback: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    添加练习记录
+    每次练习完成后调用此接口保存记录
+    """
+    record = PracticeRecord(
+        user_id=user_id,
+        craft_id=craft_id,
+        craft_name=craft_name,
+        scenario=scenario,
+        duration=duration,
+        score=score,
+        accuracy=accuracy,
+        feedback=feedback
+    )
+    db.add(record)
+
+    # 更新用户能力数据
+    abilities = db.query(UserAbility).filter(UserAbility.user_id == user_id).first()
+    if not abilities:
+        abilities = UserAbility(user_id=user_id)
+        db.add(abilities)
+
+    # 根据练习结果更新能力值 (简化版)
+    # 稳定性：基于多次练习的分数方差
+    # 准确度：基于 accuracy 的平均值
+    # 速度：基于 duration 的倒数
+    recent_records = db.query(PracticeRecord).filter(
+        PracticeRecord.user_id == user_id
+    ).order_by(PracticeRecord.created_at.desc()).limit(10).all()
+
+    if recent_records:
+        # 计算平均准确率
+        new_accuracy = sum(r.accuracy for r in recent_records) / len(recent_records)
+        abilities.accuracy = round(new_accuracy, 1)
+
+        # 计算平均速度 (基于完成时间，时间越短速度越快)
+        avg_duration = sum(r.duration for r in recent_records) / len(recent_records)
+        # 假设标准完成时间是 1800 秒 (30 分钟)
+        speed_score = min(100, (1800 / avg_duration) * 80) if avg_duration > 0 else 50
+        abilities.speed = round(speed_score, 1)
+
+        # 稳定性基于分数波动
+        scores = [r.score for r in recent_records]
+        if len(scores) > 1:
+            avg_score = sum(scores) / len(scores)
+            variance = sum((s - avg_score) ** 2 for s in scores) / len(scores)
+            # 方差越小越稳定，转换为 0-100 的分数
+            stability_score = max(0, min(100, 100 - variance / 10))
+            abilities.stability = round(stability_score, 1)
+
+    # 更新用户经验值
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        exp_gained = int(score * (duration / 600))  # 基于分数和时长计算经验
+        user.experience_points += exp_gained
+        # 根据经验值更新等级
+        if user.experience_points >= 5000:
+            user.level = UserLevel.GRANDMASTER
+            user.title = "非遗宗师"
+        elif user.experience_points >= 2000:
+            user.level = UserLevel.MASTER
+            user.title = "工艺大师"
+        elif user.experience_points >= 800:
+            user.level = UserLevel.ADVANCED
+            user.title = "高级学徒"
+        elif user.experience_points >= 200:
+            user.level = UserLevel.APPRENTICE
+            user.title = "初级学徒"
+
+    db.commit()
+
+    return {"status": "success", "record_id": record.id}
+
+
+@router.post("/profile/{user_id}/work")
+async def add_user_work(
+    user_id: int,
+    craft_id: str,
+    craft_name: str,
+    title: str,
+    image_url: str,
+    description: Optional[str] = None,
+    ai_generated: bool = False,
+    prompt_used: Optional[str] = None,
+    style: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    添加用户作品
+    用户完成创作后调用此接口保存作品
+    """
+    work = UserWork(
+        user_id=user_id,
+        craft_id=craft_id,
+        craft_name=craft_name,
+        title=title,
+        image_url=image_url,
+        description=description,
+        ai_generated=1 if ai_generated else 0,
+        prompt_used=prompt_used,
+        style=style
+    )
+    db.add(work)
+
+    # 更新用户创造力能力
+    abilities = db.query(UserAbility).filter(UserAbility.user_id == user_id).first()
+    if abilities:
+        # 每增加一个作品，创造力增加 2 点 (上限 100)
+        abilities.creativity = min(100, abilities.creativity + 2)
+        db.commit()
+
+    db.refresh(work)
+    return {"status": "success", "work_id": work.id}
+
+
+@router.put("/profile/{user_id}/abilities")
+async def update_user_abilities(
+    user_id: int,
+    stability: Optional[float] = None,
+    accuracy: Optional[float] = None,
+    speed: Optional[float] = None,
+    creativity: Optional[float] = None,
+    knowledge: Optional[float] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    更新用户能力数据
+    检验标准:
+    - [x] 数据实时更新
+    """
+    abilities = db.query(UserAbility).filter(UserAbility.user_id == user_id).first()
+    if not abilities:
+        abilities = UserAbility(user_id=user_id)
+        db.add(abilities)
+
+    if stability is not None:
+        abilities.stability = stability
+    if accuracy is not None:
+        abilities.accuracy = accuracy
+    if speed is not None:
+        abilities.speed = speed
+    if creativity is not None:
+        abilities.creativity = creativity
+    if knowledge is not None:
+        abilities.knowledge = knowledge
+
+    db.commit()
+    db.refresh(abilities)
+
+    return {
+        "status": "success",
+        "abilities": {
+            "stability": abilities.stability,
+            "accuracy": abilities.accuracy,
+            "speed": abilities.speed,
+            "creativity": abilities.creativity,
+            "knowledge": abilities.knowledge
+        }
     }

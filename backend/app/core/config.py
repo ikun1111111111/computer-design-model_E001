@@ -1,5 +1,9 @@
 import os
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Load environment variables from .env file (located in backend directory)
+load_dotenv()
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Digital Inheritor Backend"

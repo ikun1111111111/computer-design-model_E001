@@ -5,6 +5,11 @@
 
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 # Add the backend directory to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -65,11 +70,12 @@ def init_database():
     print(f"  - Database: {settings.MYSQL_DATABASE}")
     print(f"  - User: {settings.MYSQL_USER}")
     print("\n数据表:")
+    print("  - users: 用户基本信息表")
+    print("  - practice_records: 用户练习记录表")
+    print("  - user_works: 用户作品集表")
+    print("  - user_abilities: 用户能力五维数据表")
     print("  - conversations: 对话历史表")
     print("  - follow_up_questions: 追问选项表")
-    print("  - users: 用户表")
-    print("  - practice_logs: 学习记录表")
-    print("  - portfolios: 作品集表")
 
 
 if __name__ == "__main__":
