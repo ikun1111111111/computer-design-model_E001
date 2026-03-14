@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-rice-paper text-ink-black font-serif antialiased;
+    background-image: url('data:image/svg+xml,%3Csvg viewBox=%220 0 200 200%22 xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter id=%22noiseFilter%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.65%22 numOctaves=%223%22 stitchTiles=%22stitch%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23noiseFilter)%22 opacity=%220.05%22/%3E%3C/svg%3E');
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #F7F5F0;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #CCD4BF;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #5796B3;
+  }
+}
+
+@layer utilities {
+  .vertical-text {
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+
+  .card-shadow {
+    box-shadow: 0 4px 20px -2px rgba(43, 43, 43, 0.1);
+  }
+
+  .seal-border {
+    @apply border-2 border-vermilion px-1 py-0.5 inline-block rounded-sm;
+  }
+
+  /* Markdown Content Styles */
+  .markdown-content {
+    @apply text-sm leading-relaxed;
+  }
+
+  .markdown-content p {
+    @apply mb-2 last:mb-0;
+  }
+
+  .markdown-content h1 {
+    @apply font-calligraphy text-lg font-bold mb-2 mt-3 text-ink-black;
+  }
+
+  .markdown-content h2 {
+    @apply font-calligraphy text-base font-bold mb-2 mt-3 text-ink-black;
+  }
+
+  .markdown-content h3 {
+    @apply font-xiaowei text-sm font-bold mb-1 mt-2 text-ink-black;
+  }
+
+  .markdown-content ul,
+  .markdown-content ol {
+    @apply mb-2 space-y-1 ml-4;
+  }
+
+  .markdown-content li {
+    @apply text-sm;
+  }
+
+  .markdown-content strong {
+    @apply font-bold text-ink-black;
+  }
+
+  .markdown-content em {
+    @apply italic;
+  }
+
+  .markdown-content code {
+    @apply bg-ink-black/5 px-1.5 py-0.5 rounded font-mono text-xs;
+  }
+
+  .markdown-content pre {
+    @apply bg-ink-black/5 p-3 rounded-sm text-xs font-mono my-2 overflow-x-auto;
+  }
+
+  .markdown-content pre code {
+    @apply bg-transparent px-0 py-0;
+  }
+
+  .markdown-content blockquote {
+    @apply border-l-2 border-tea-green pl-3 italic my-2 text-charcoal/70;
+  }
+
+  .markdown-content table {
+    @apply min-w-full border border-ink-black/10 text-sm my-2 overflow-x-auto;
+  }
+
+  .markdown-content th {
+    @apply border border-ink-black/10 bg-ink-black/5 px-2 py-1.5 font-bold text-ink-black;
+  }
+
+  .markdown-content td {
+    @apply border border-ink-black/10 px-2 py-1.5;
+  }
+
+  .markdown-content a {
+    @apply text-cyan-glaze hover:underline;
+  }
+
+  .markdown-wrapper {
+    @apply whitespace-pre-wrap break-words text-xs text-charcoal font-serif;
+  }
+}
